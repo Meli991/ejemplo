@@ -1,42 +1,89 @@
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ] 
+# TensorFlow and tf.keras
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.optimizers import Adam
 
-jobs:
- 
-  build:
-    runs-on: ubuntu-latest
-    container: adsoft/aiops:latest 
+# Helper libraries
+# import matplotlib.pyplot as plt
+import numpy as np
+from os import listdir
+from os.path import join
+import cv2
+import pandas
+import os
+import random
+import pathlib
 
-    steps:
-    - uses: actions/checkout@v2
-    - name: hello-world
-      run: echo "hello world workflows …"
-    - name: install additional modules 
-      run: pip install -r requirements.txt
-    - name: execute model
-      run: python flowers-model.py
-    - name: show dir
-      run: ls -la flowers-model
+# Set the path of the input folder
 
-    - name: docker login
-      env:
-        DOCKER_USER: ${{secrets.DOCKER_USER}}
-        DOCKER_PASSWORD: ${{secrets.DOCKER_PASSWORD}}
-        
-      run: |
-        docker login -u $DOCKER_USER -p $DOCKER_PASSWORD 
-        
-    - name: Download and run the Docker base image
-      run: docker run -d --name serving_base tensorflow/serving
+dataset = "https://storage.googleapis.com/download.tensorflow.org/example_images/flower_photos.tgz"
+directory = tf.keras.utils.get_file('flower_photos', origin=dataset, untar=True)
+data = pathlib.Path(directory)
+folders = os.listdir(data)
+#print(folders)
 
-    - name: copy model to the Docker image
-      run: docker cp ${{secrets.MODEL_NAME}} serving_base:/models/${{secrets.MODEL_NAME}}
-      
-    - name: Build the custom Docker image
-      run: docker commit --change "ENV MODEL_NAME ${{secrets.MODEL_NAME}}" serving_base ${{secrets.DOCKER_USER}}/tensorflow-${{secrets.MODEL_NAME}}:${{ github.sha }}
-  
-    - name: Docker Push 
-      run: docker push ${{secrets.DOCKER_USER}}/tensorflow-${{secrets.MODEL_NAME}}:${{ github.sha }}
+# Import the images and resize them to a 128*128 size
+# Also generate the corresponding labels
+
+image_names = []
+train_labels = []
+train_images = []
+
+size = 64,64
+print('folders')
+folders.remove("LICENSE.txt")
+print(folders)
+
+for folder in folders:
+    for file in os.listdir(os.path.join(data,folder)):
+        if file.endswith("jpg"):
+            image_names.append(os.path.join(data,folder,file))
+            train_labels.append(folder)
+            img = cv2.imread(os.path.join(data,folder,file))
+            im = cv2.resize(img,size)
+            train_images.append(im)
+        else:
+            continue
+
+# Transform the image array to a numpy type
+
+train = np.array(train_images)
+print(train.shape)
+
+# Reduce the RGB values between 0 and 1
+train = train.astype('float32') / 255.0
+# Extract the labels
+label_dummies = pandas.get_dummies(train_labels)
+labels =  label_dummies.values.argmax(1)
+pandas.unique(train_labels)
+print(pandas.unique(labels))
+
+# Shuffle the labels and images randomly for better results
+
+union_list = list(zip(train, labels))
+random.shuffle(union_list)
+train,labels = zip(*union_list)
+
+# Convert the shuffled list to numpy array type
+
+train = np.array(train)
+labels = np.array(labels)
+
+
+# Develop a sequential model using tensorflow keras
+model = keras.Sequential([
+    keras.layers.Flatten(input_shape=(64,64,3)),
+    keras.layers.Dense(128, activation=tf.nn.tanh),
+    keras.layers.Dense(10, activation=tf.nn.softmax)
+])
+
+# Compute the model parameters
+
+model.compile(optimizer=Adam(learning_rate=0.001),
+              loss='sparse_categorical_crossentropy',
+              metrics=['accuracy'])
+
+model.fit(train,labels, epochs=5)
+
+export_path = 'flowers-model/1/'
+tf.saved_model.save(model, os.path.join('./',export_path))
